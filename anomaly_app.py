@@ -1,134 +1,172 @@
-import streamlit as st
+import streamlit as st 
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.ensemble import IsolationForest
+from sklearn.neighbors import LocalOutlierFactor
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 st.set_page_config(page_title="다변량 시계열 이상탐지", layout="wide")
 
-# 1. 가상의 다변량 시계열 샘플 데이터 생성 함수
+# 1. 가상의 다변량 시계열 샘플 데이터 생성
 @st.cache_data
 def generate_sample_multivariate_data():
-    dates = pd.date_range(start='2023-01-01', periods=200, freq='D')
-    # 정상 데이터 생성 (3개의 변수)
-    var1 = np.sin(np.linspace(0, 20, 200)) * 10 + np.random.normal(0, 2, 200)
-    var2 = np.cos(np.linspace(0, 20, 200)) * 15 + np.random.normal(0, 3, 200)
-    var3 = np.linspace(10, 50, 200) + np.random.normal(0, 5, 200)
+    dates = pd.date_range(start='2023-01-01', periods=300, freq='D')
+    var1 = np.sin(np.linspace(0, 30, 300)) * 10 + np.random.normal(0, 2, 300)
+    var2 = np.cos(np.linspace(0, 30, 300)) * 15 + np.random.normal(0, 3, 300)
+    var3 = np.linspace(10, 60, 300) + np.random.normal(0, 5, 300)
     
     df = pd.DataFrame({'Date': dates, 'Sensor_A': var1, 'Sensor_B': var2, 'Sensor_C': var3})
     
     # 인위적인 이상치(Anomaly) 주입
-    df.loc[50:52, ['Sensor_A', 'Sensor_B']] += 30
-    df.loc[150, 'Sensor_C'] -= 40
+    df.loc[70:73, ['Sensor_A', 'Sensor_B']] += 30
+    df.loc[220:222, 'Sensor_C'] -= 40
+    df.loc[150, ['Sensor_A', 'Sensor_C']] += 50
     return df
 
-st.title("🚨 자동화된 다변량 시계열 이상탐지 대시보드")
-st.markdown("임의의 다변량 시계열 CSV 파일을 업로드하면 **Isolation Forest** 알고리즘이 자동으로 이상(Anomaly) 구간을 탐지합니다.")
+st.title("🚨 다변량 시계열 이상탐지 종합 대시보드")
+st.markdown("데이터를 업로드하고 알고리즘을 선택하여 다변량 시계열 데이터 내의 이상 패턴을 다각도로 분석하세요.")
 
-# 2. 사이드바: 설정 및 파일 업로드
-st.sidebar.header("설정 (Settings)")
+# 2. 사이드바: 설정, 파일 업로드 및 알고리즘 선택
+st.sidebar.header("⚙️ 분석 설정 (Settings)")
 uploaded_file = st.sidebar.file_uploader("다변량 시계열 CSV 업로드", type=['csv'])
 
-# 이상치 비율(Contamination) 파라미터 조절 슬라이더
 st.sidebar.markdown("---")
-st.sidebar.subheader("알고리즘 파라미터")
-contamination_rate = st.sidebar.slider(
-    "예상 이상치 비율 (Contamination)", 
-    min_value=0.01, max_value=0.20, value=0.05, step=0.01,
-    help="데이터 내에 이상치가 차지하는 대략적인 비율을 설정합니다. 값이 클수록 더 많은 이상치를 탐지합니다."
+st.sidebar.subheader("알고리즘 및 파라미터")
+algorithm = st.sidebar.selectbox(
+    "탐지 알고리즘 선택",
+    ["Isolation Forest", "LOF (Local Outlier Factor)"]
 )
 
-# 3. 데이터 로드
+contamination_rate = st.sidebar.slider(
+    "예상 이상치 비율 (Contamination)", 
+    min_value=0.01, max_value=0.20, value=0.05, step=0.01
+)
+
+# 3. 데이터 로드 및 전처리
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
-    st.success(f"'{uploaded_file.name}' 파일이 성공적으로 업로드 및 분석되었습니다!")
+    st.sidebar.success("파일 업로드 완료!")
 else:
     df = generate_sample_multivariate_data()
-    st.info("업로드된 파일이 없어 기본 다변량 샘플 데이터를 사용합니다.")
+    st.sidebar.info("샘플 데이터 사용 중")
 
-# 데이터 전처리 (첫 번째 열을 날짜/시간 인덱스로 가정, 나머지는 다변량 피처)
 time_col = df.columns[0]
 feature_cols = df.columns[1:]
 
-st.subheader("데이터 미리보기")
-st.write(df.head())
-
-# 4. 모델링 (Isolation Forest를 활용한 다변량 이상탐지)
-with st.spinner('다변량 패턴을 분석하여 이상치를 탐지하고 있습니다...'):
-    # 피처 데이터 추출
-    X = df[feature_cols].copy()
+with st.spinner('데이터 전처리 및 이상치 탐지 알고리즘 구동 중...'):
+    X = df[feature_cols].copy().ffill().fillna(0)
     
-    # 결측치 처리 (단순히 0으로 채우거나 앞선 값으로 채움)
-    X = X.ffill().fillna(0)
+    # 다변량 분석(PCA, LOF 등)을 위한 데이터 스케일링 (중요 포인트)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
     
-    # 모델 정의 및 학습
-    model = IsolationForest(contamination=contamination_rate, random_state=42)
-    df['Anomaly_Label'] = model.fit_predict(X) # -1: 이상, 1: 정상
-    df['Anomaly_Score'] = model.decision_function(X) # 낮을수록 비정상
+    # 4. 모델링 (선택된 알고리즘 적용)
+    if algorithm == "Isolation Forest":
+        model = IsolationForest(contamination=contamination_rate, random_state=42)
+        df['Anomaly_Label'] = model.fit_predict(X_scaled)
+        df['Anomaly_Score'] = model.decision_function(X_scaled)
+    else:  # LOF
+        model = LocalOutlierFactor(contamination=contamination_rate)
+        df['Anomaly_Label'] = model.fit_predict(X_scaled)
+        df['Anomaly_Score'] = model.negative_outlier_factor_
     
-    # 시각화를 위해 이상치 여부를 Boolean으로 변환
     df['Is_Anomaly'] = df['Anomaly_Label'] == -1
 
-# 5. 성능 평가 및 지표 대시보드
+# 5. 최상단 KPI 대시보드
 st.markdown("---")
-st.subheader("📊 이상탐지 결과 요약 및 평가 지표")
-
 total_data = len(df)
 anomaly_count = df['Is_Anomaly'].sum()
 actual_anomaly_rate = (anomaly_count / total_data) * 100
-avg_anomaly_score = df.loc[df['Is_Anomaly'], 'Anomaly_Score'].mean()
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("총 데이터 수", f"{total_data} 건")
-col2.metric("탐지된 이상치 수", f"{anomaly_count} 건")
-col3.metric("실제 탐지 비율", f"{actual_anomaly_rate:.1f} %")
-# 이상치 점수가 낮을수록(음수일수록) 심각한 이상치임을 나타냄
-col4.metric("평균 이상치 점수", f"{avg_anomaly_score:.2f}")
+col1.metric("총 데이터 포인트", f"{total_data} 건")
+col2.metric("탐지된 이상치", f"{anomaly_count} 건")
+col3.metric("이상치 비율", f"{actual_anomaly_rate:.1f} %")
+col4.metric("적용 알고리즘", algorithm)
+st.markdown("<br>", unsafe_allow_html=True)
 
-st.markdown("""
-> **💡 탐지 적절성 판단 가이드:**
-> * 비지도 학습 특성상 정답(Label)이 없으므로 정밀도나 재현율은 계산할 수 없습니다.
-> * 대신 우측의 '이상치 점수 분포'에서 음수 영역(이상치)과 양수 영역(정상)이 뚜렷하게 구분되는지 확인하여 모델의 적절성을 평가합니다.
-""")
+# 6. 탭(Tabs)을 활용한 입체적 UI 구성
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 탐지 요약 및 히트맵", 
+    "📈 변수별 상세 시계열", 
+    "🌌 PCA 다변량 시각화", 
+    "💾 이상치 보고서 및 다운로드"
+])
 
-# 6. 결과 시각화
-st.markdown("---")
-st.subheader("📈 다변량 시계열 및 이상탐지 시각화")
+with tab1:
+    st.subheader("탐지 점수 분포 및 변수 상관관계")
+    c1, c2 = st.columns(2)
+    with c1:
+        # 이상치 점수 히스토그램
+        fig_hist = px.histogram(
+            df, x="Anomaly_Score", color="Is_Anomaly", 
+            nbins=50, color_discrete_map={True: 'red', False: 'blue'},
+            title="이상치 점수(Anomaly Score) 분포"
+        )
+        st.plotly_chart(fig_hist, use_container_width=True)
+    with c2:
+        # 다변량 상관관계 히트맵
+        corr_matrix = df[feature_cols].corr()
+        fig_corr = px.imshow(
+            corr_matrix, text_auto=True, color_continuous_scale='RdBu_r',
+            title="변수 간 상관관계 분석"
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
 
-# 시각화할 피처 선택
-selected_feature = st.selectbox("그래프에 표시할 변수(피처)를 선택하세요:", feature_cols)
+with tab2:
+    st.subheader("변수별 이상치 탐지 시각화")
+    selected_feature = st.selectbox("그래프에 표시할 변수를 선택하세요:", feature_cols)
+    
+    fig_time = go.Figure()
+    fig_time.add_trace(go.Scatter(
+        x=df[time_col], y=df[selected_feature], mode='lines', name='정상 데이터', line=dict(color='lightblue', width=2)
+    ))
+    
+    anomalies = df[df['Is_Anomaly']]
+    fig_time.add_trace(go.Scatter(
+        x=anomalies[time_col], y=anomalies[selected_feature], mode='markers', name='탐지된 이상치', marker=dict(color='red', size=8, symbol='x')
+    ))
+    fig_time.update_layout(height=450, hovermode="x unified")
+    st.plotly_chart(fig_time, use_container_width=True)
 
-fig1 = go.Figure()
+with tab3:
+    st.subheader("PCA 기반 다변량 군집 및 이상치 시각화")
+    st.markdown("여러 개의 변수를 2차원으로 축소(PCA)하여, 이상치가 일반 데이터 군집에서 얼마나 떨어져 있는지 직관적으로 확인합니다.")
+    
+    # PCA 수행 (2차원)
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(X_scaled)
+    df_pca = pd.DataFrame(data=pca_result, columns=['PCA1', 'PCA2'])
+    df_pca['Is_Anomaly'] = df['Is_Anomaly']
+    df_pca[time_col] = df[time_col]
+    
+    fig_pca = px.scatter(
+        df_pca, x='PCA1', y='PCA2', color='Is_Anomaly', 
+        hover_data=[time_col],
+        color_discrete_map={True: 'red', False: 'royalblue'},
+        title="2D PCA Scatter Plot"
+    )
+    fig_pca.update_traces(marker=dict(size=8, opacity=0.7))
+    st.plotly_chart(fig_pca, use_container_width=True)
 
-# 정상 데이터 라인
-fig1.add_trace(go.Scatter(
-    x=df[time_col], y=df[selected_feature],
-    mode='lines', name='정상 데이터',
-    line=dict(color='lightblue', width=2)
-))
-
-# 이상치 산점도 마커
-anomalies = df[df['Is_Anomaly']]
-fig1.add_trace(go.Scatter(
-    x=anomalies[time_col], y=anomalies[selected_feature],
-    mode='markers', name='탐지된 이상치',
-    marker=dict(color='red', size=8, symbol='x')
-))
-
-fig1.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified")
-st.plotly_chart(fig1, use_container_width=True)
-
-# 7. 이상치 점수(Decision Score) 분포도 (모델의 신뢰성 평가용)
-st.subheader("📉 이상치 점수(Anomaly Score) 분포")
-st.markdown("모델이 계산한 점수입니다. 0보다 작으면 이상치, 0보다 크면 정상으로 분류됩니다.")
-
-fig2 = px.histogram(
-    df, x="Anomaly_Score", color="Is_Anomaly", 
-    nbins=50, 
-    color_discrete_map={True: 'red', False: 'blue'},
-    labels={'Is_Anomaly': '이상치 여부', 'Anomaly_Score': '이상치 점수 (낮을수록 이상)'}
-)
-fig2.add_vline(x=0, line_dash="dash", line_color="black", annotation_text="분류 기준 (0)")
-fig2.update_layout(height=300, margin=dict(l=0, r=0, t=30, b=0))
-st.plotly_chart(fig2, use_container_width=True)
+with tab4:
+    st.subheader("⚠️ Top 10 심각한 이상치 발생 데이터")
+    st.markdown("이상치 점수(Anomaly Score)가 가장 낮은(가장 비정상적인) 상위 10개의 데이터를 확인하고 전체 결과를 다운로드할 수 있습니다.")
+    
+    # 점수가 낮은 순으로 정렬 (점수가 낮을수록 심각한 이상치)
+    top_anomalies = df[df['Is_Anomaly']].sort_values("Anomaly_Score", ascending=True).head(10)
+    st.dataframe(top_anomalies, use_container_width=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # 전체 분석 결과 CSV 다운로드
+    csv_data = df.to_csv(index=False).encode('utf-8-sig')
+    st.download_button(
+        label="📥 전체 분석 결과 CSV 다운로드",
+        data=csv_data,
+        file_name='multivariate_anomaly_result.csv',
+        mime='text/csv',
+    )
