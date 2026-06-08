@@ -156,14 +156,18 @@ with tab4:
     st.subheader("⚠️ Top 10 심각한 이상치 발생 데이터")
     st.markdown("이상치 점수(Anomaly Score)가 가장 낮은(가장 비정상적인) 상위 10개의 데이터를 확인하고 전체 결과를 다운로드할 수 있습니다.")
     
-    # 점수가 낮은 순으로 정렬 (점수가 낮을수록 심각한 이상치)
     top_anomalies = df[df['Is_Anomaly']].sort_values("Anomaly_Score", ascending=True).head(10)
     st.dataframe(top_anomalies, use_container_width=True)
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # 전체 분석 결과 CSV 다운로드
-    csv_data = df.to_csv(index=False).encode('utf-8-sig')
+    # 변경된 부분: CSV 변환 작업을 함수로 묶고 캐싱 처리하여 속도 및 안정성 향상
+    @st.cache_data
+    def convert_df(dataframe):
+        return dataframe.to_csv(index=False).encode('utf-8-sig')
+
+    csv_data = convert_df(df)
+    
     st.download_button(
         label="📥 전체 분석 결과 CSV 다운로드",
         data=csv_data,
